@@ -263,7 +263,7 @@ elif sys.platform=='darwin':
     '../third_party/lib',
     mozobjpath + '/dist/sdk/lib',
     mozobjpath + '/dist/sdk/bin',
-    webrtcpath + '/xcodebuild/Debug',
+    webrtcpath + '/out/Debug',
   ]
   libs += [
     componentName + suffixName,
@@ -294,7 +294,7 @@ elif sys.platform=='darwin':
     'libCNG.a',
     'libG711.a',
     'libG722.a',
-    'libgenperf_libs.a',
+#    'libgenperf_libs.a',
     'libiLBC.a',
     'libiSAC.a',
     'libiSACFix.a',

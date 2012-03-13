@@ -37,7 +37,6 @@
  *
  * ***** END LICENSE BLOCK ***** */
 
-
 #include "cpr_types.h"
 #include "cpr_stdio.h"
 #include "cpr_assert.h"
@@ -50,8 +49,11 @@
 #include "cpr_string.h"
 #include <sys/syslog.h>
 #include <sys/fcntl.h>
+#include <arpa/inet.h>
 #include <ctype.h>
+#include <unistd.h>
 
+#define CPR_REVERSE 0x80000000
 
 const cpr_ip_addr_t ip_addr_invalid = {0};
 
@@ -64,6 +66,108 @@ const cpr_ip_addr_t ip_addr_invalid = {0};
 /* Forward declarations of internal (helper) functions */
 static int cpr_inet_pton4(const char *src, uint8_t *dst, int pton);
 static int cpr_inet_pton6(const char *src, uint8_t *dst);
+
+typedef struct dummy_socket_addr_ {
+  cpr_sockaddr_t *addr;
+  cpr_socklen_t addr_len;
+} dummy_socket_addr;
+
+typedef struct dummy_data_ {
+  unsigned char *buf;
+  size_t len;
+  int offset;
+  struct dummy_data_ *next;
+} dummy_data;
+
+typedef struct dummy_socket_ {
+  int fd;
+  uint32_t domain;
+  dummy_socket_addr local;
+  dummy_socket_addr remote;
+  dummy_data *data_in;
+  dummy_data *data_out;
+  int peer;
+  int in_use;
+} dummy_socket;
+
+#define MAX_SOCKETS 64
+static dummy_socket socket_table[MAX_SOCKETS] = {};
+
+void copy_addr(dummy_socket_addr *to, const cpr_sockaddr_t *addr, cpr_socklen_t addr_len) {
+   if (to->addr)
+        free(to->addr);
+   if (!(to->addr = malloc(addr_len)))
+       assert(0);
+   memcpy(to->addr, addr, addr_len);
+   to->addr_len = addr_len;
+}
+
+dummy_socket *get_socket(cpr_socket_t soc) {
+    if (soc < 0)
+        return 0;
+    if (soc >= MAX_SOCKETS)
+        return 0;
+    
+    if (!socket_table[soc].in_use)
+        return 0;
+    
+    return(&socket_table[soc]);
+}
+
+dummy_socket *find_socket(uint32_t domain, const cpr_sockaddr_t *addr, cpr_socklen_t addr_len) {
+    int i;
+
+    for (i=0; i<MAX_SOCKETS; i++) {
+        dummy_socket *s2 = get_socket(i);
+        if (!s2)
+            continue;
+        
+        if (s2->local.addr_len != addr_len)
+            continue;
+
+        if (memcmp(s2->local.addr, addr, addr_len))
+            continue;
+
+        return s2;
+    }
+    
+    return NULL;
+}
+
+cpr_socket_t cprFindSocket(uint32_t domain, const cpr_sockaddr_t *addr, cpr_socklen_t addr_len) {
+  dummy_socket *s = find_socket(domain, addr, addr_len);
+  if (!s)
+    return INVALID_SOCKET;
+  
+  return s->fd;
+}
+
+cpr_socket_t cprFindSocketIP4(char *ip) {
+  struct sockaddr_in addr;
+  struct sockaddr_in *addrp;
+
+  int i;
+
+  if (!cpr_inet_pton4(ip, (uint8_t *)&addr.sin_addr, 1))
+    return INVALID_SOCKET;
+  
+  for (i=0; i<MAX_SOCKETS; i++) {
+    dummy_socket *s = &socket_table[i];
+
+    if (!s->in_use)
+      continue;
+    if (s->domain != AF_INET)
+      continue;
+
+    addrp = (struct sockaddr_in *)s->local.addr;
+    if (addrp->sin_addr.s_addr == addr.sin_addr.s_addr)
+      return s->fd;
+  }
+
+  return INVALID_SOCKET;
+}
+
+#define CHECK_SOCKET(soc) cprAssert(get_socket(soc) != 0, CPR_FAILURE)
 
 /**
  * cprBind
@@ -94,9 +198,16 @@ cprBind (cpr_socket_t soc,
          cpr_socklen_t addr_len)
 {
     cprAssert(addr != NULL, CPR_FAILURE);
+    CHECK_SOCKET(soc);
+    dummy_socket *s = get_socket(soc);
+    
+    if (s->domain == AF_INET) {
+        printf("Binding socket %d to addr %s\n", soc, inet_ntoa(((struct sockaddr_in *)addr)->sin_addr));
+    }
 
-    return ((bind(soc, (struct sockaddr *)addr, addr_len) != 0) ?
-            CPR_FAILURE : CPR_SUCCESS);
+    copy_addr(&s->local, addr, addr_len);
+
+    return CPR_SUCCESS;
 }
 
 /**
@@ -120,7 +231,13 @@ cprBind (cpr_socket_t soc,
 cpr_status_e
 cprCloseSocket (cpr_socket_t soc)
 {
-    return ((close(soc) != 0) ? CPR_FAILURE : CPR_SUCCESS);
+    dummy_socket *s = get_socket(soc);
+    if (!s)
+        return CPR_SUCCESS;
+
+    s->in_use = 0;
+
+    return CPR_SUCCESS;
 }
 
 /**
@@ -163,25 +280,19 @@ cprConnect (cpr_socket_t soc,
             SUPPORT_CONNECT_CONST cpr_sockaddr_t * RESTRICT addr,
             cpr_socklen_t addr_len)
 {
-    int retry = 0, retval;
+    dummy_socket *s;
 
     cprAssert(addr != NULL, CPR_FAILURE);
+    CHECK_SOCKET(soc);
+    s = get_socket(soc);
 
-    retval = connect(soc, (struct sockaddr *)addr, addr_len);
-
-    while( retval == -1 && ((errno == EAGAIN && retry < MAX_RETRY_FOR_EAGAIN) || errno == EINPROGRESS || errno == EALREADY) ) {
-      cprSleep(100);
-      retry++;
-      retval = connect(soc, (struct sockaddr *)addr, addr_len);
+    if (s->domain == AF_INET) {
+        printf("Connecting socket %d to addr %s\n", soc, inet_ntoa(((struct sockaddr_in *)addr)->sin_addr));
     }
 
-    cpr_status_e returnValue = CPR_FAILURE;
-    if ( retval == 0 || (retval == -1 && errno == EISCONN))
-    {
-        returnValue =  CPR_SUCCESS;      
-    }
+    copy_addr(&s->remote, addr, addr_len);    
 
-  return returnValue;
+    return CPR_SUCCESS;
 }
 
 /**
@@ -220,8 +331,13 @@ cprGetSockName (cpr_socket_t soc,
     cprAssert(addr != NULL, CPR_FAILURE);
     cprAssert(addr_len != NULL, CPR_FAILURE);
 
-    return ((getsockname(soc, (struct sockaddr *)addr, addr_len) != 0) ?
-            CPR_FAILURE : CPR_SUCCESS);
+    CHECK_SOCKET(soc);
+    dummy_socket *s = get_socket(soc);
+    cprAssert(addr_len >= s->local.addr_len, CPR_FAILURE);
+    memcpy(addr, s->local.addr, s->local.addr_len);
+    *addr_len = s->local.addr_len;
+
+    return CPR_SUCCESS;
 }
 
 /**
@@ -256,7 +372,7 @@ cpr_status_e
 cprListen (cpr_socket_t soc,
            uint16_t backlog)
 {
-    return ((listen(soc, backlog) != 0) ? CPR_FAILURE : CPR_SUCCESS);
+    return CPR_SUCCESS;
 }
 
 /**
@@ -309,21 +425,39 @@ cprRecv (cpr_socket_t soc,
          size_t len,
          int32_t flags)
 {
-    ssize_t rc;
-    int retry = 0;
+    size_t tocpy;
+    size_t left;
+    dummy_data *d;
+    dummy_socket *s;
 
-    cprAssert(buf != NULL, CPR_FAILURE);
+    CHECK_SOCKET(soc);
+    s = get_socket(soc);
+    d = (flags & CPR_REVERSE) ? s->data_out : s->data_in;
 
-    rc = recv(soc, buf, len, flags);
-    while( rc == -1 && errno == EAGAIN && retry < MAX_RETRY_FOR_EAGAIN ) {
-      cprSleep(100);
-      retry++;
-      rc = recv(soc, buf, len, flags);
-    }
-    if (rc == -1) {
+    if (!d)
         return SOCKET_ERROR;
+    
+    left = d->len - d->offset;
+
+    tocpy = (left > len) ? len : left;
+
+    memcpy(buf, d->buf + d->offset, tocpy);
+    d->offset += tocpy;
+
+    if (d->offset == d->len) {
+      if (flags & CPR_REVERSE) {
+        s->data_out = d->next;        
+      }
+      else {
+        s->data_in = d->next;        
+      }
+        
+      free(d->buf);
+      free(d);
     }
-    return rc;
+
+    printf("Reading %d bytes from socket %d\n", (int)tocpy, soc);
+    return tocpy;
 }
 
 /**
@@ -380,25 +514,7 @@ cprRecvFrom (cpr_socket_t soc,
              cpr_sockaddr_t * RESTRICT from,
              cpr_socklen_t * RESTRICT fromlen)
 {
-    ssize_t rc;
-    int retry = 0;
-
-    cprAssert(buf != NULL, CPR_FAILURE);
-    cprAssert(from != NULL, CPR_FAILURE);
-    cprAssert(fromlen != NULL, CPR_FAILURE);
-
-    rc = recvfrom(soc, buf, len, flags, (struct sockaddr *)from, fromlen);
-    while( rc == -1 && errno == EAGAIN && retry < MAX_RETRY_FOR_EAGAIN ) {
-      cprSleep(100);
-      retry++;
-      rc = recvfrom(soc, buf, len, flags, (struct sockaddr *)from, fromlen);
-    }
-
-    if (rc == -1) {
-        CPR_INFO("error in recvfrom buf=%x fromlen=%d\n", buf, *fromlen);
-        return SOCKET_ERROR;
-    }
-    return rc;
+    return cprRecv(soc, buf, len, flags);
 }
 
 /**
@@ -461,23 +577,50 @@ cprSelect (uint32_t nfds,
            fd_set * RESTRICT except_fds,
            struct cpr_timeval * RESTRICT timeout)
 {
-    int16_t rc;
-    struct timeval t, *t_p;
-    printf("SELECT\n");
-    if (timeout != NULL) {
-        t.tv_sec  = timeout->tv_sec;
-        t.tv_usec = timeout->tv_usec;
-        t_p       = &t;
-    } else {
-        t_p       = NULL; 
+    int fd;
+    int num_ready = 0;
+    fd_set read_fds_out, write_fds_out;
+    
+    assert(nfds <= MAX_SOCKETS);
+
+    FD_ZERO(&read_fds_out);
+    FD_ZERO(&write_fds_out);
+
+    for (fd = 0; fd < nfds; fd++) {
+        int ready = 0;
+        dummy_socket *s = get_socket(fd);
+        
+        if (!s)
+            continue;
+        
+        if (read_fds && FD_ISSET(fd, read_fds) && s->data_in) {
+            ready = 1;
+            FD_SET(fd, &read_fds_out);
+        }
+
+        if (write_fds && FD_ISSET(fd, write_fds)) {
+            ready = 1;
+            FD_SET(fd, &write_fds_out);
+        }
+
+        if (ready) {
+            printf("Socket %d is ready\n", fd);
+            num_ready++;
+        }
     }
 
-    rc = (int16_t) select(nfds, read_fds, write_fds, except_fds, t_p);
-    if (rc == -1) {
-        return SOCKET_ERROR;
+    if (read_fds) FD_COPY(&read_fds_out, read_fds);
+    if (write_fds) FD_COPY(&write_fds_out, write_fds);
+    if (except_fds) FD_ZERO(except_fds);
+
+    if (num_ready) {
+        printf("Select returns %d sockets ready\n", num_ready);
+        return num_ready;
     }
-    printf("SELECT returned %d\n", rc);
-    return rc;
+
+    usleep(200000); /* Just avoid an insane busy loop */
+    
+    return 0;
 }
 
 /**
@@ -524,22 +667,40 @@ cprSend (cpr_socket_t soc,
          size_t len,
          int32_t flags)
 {
-    ssize_t rc;
-    int retry = 0;
+    CHECK_SOCKET(soc);
+    dummy_socket *s = get_socket(soc);
 
-    cprAssert(buf != NULL, CPR_FAILURE);
+    if (len == 0)
+        return 0;
 
-    rc = send(soc, buf, len, flags);
-    while( rc == -1 && errno == EAGAIN && retry < MAX_RETRY_FOR_EAGAIN ) {
-      cprSleep(100);
-      retry++;
-      rc = send(soc, buf, len, flags);
+    dummy_data *dat = malloc(sizeof(dummy_data));
+    cprAssert(dat != 0, CPR_FAILURE);
+    
+    dat->buf = malloc(len);
+    cprAssert(dat->buf != 0, CPR_FAILURE);
+    
+    dat->offset = 0;
+    dat->next = NULL;
+    memcpy(dat->buf, buf, len);
+    dat->len = len;
+
+    if ((flags & CPR_REVERSE) ? s->data_in : s->data_out) {
+        dummy_data *d2;
+
+        /* Find end */
+        for(d2 = (flags & CPR_REVERSE) ? s->data_in : s->data_out; d2->next; d2=d2->next);
+        
+        d2->next = dat;
+    }
+    else {
+      if (flags & CPR_REVERSE)
+        s->data_in = dat;
+      else
+        s->data_out = dat;        
     }
 
-    if (rc == -1) {
-        return SOCKET_ERROR;
-    }
-    return rc;
+    printf("Wrote %d bytes to socket %d\n", (int)len, soc);
+    return len;
 }
 
 /**
@@ -592,23 +753,23 @@ cprSendTo (cpr_socket_t soc,
            CONST cpr_sockaddr_t *dest_addr,
            cpr_socklen_t dest_len)
 {
-    ssize_t rc;
-    int retry = 0;
+    CHECK_SOCKET(soc);
+    dummy_socket *local = get_socket(soc);
 
-    cprAssert(msg != NULL, CPR_FAILURE);
-    cprAssert(dest_addr != NULL, CPR_FAILURE);
-
-    rc = sendto(soc, msg, len, flags, (struct sockaddr *)dest_addr, dest_len);
-    while( rc == -1 && errno == EAGAIN && retry < MAX_RETRY_FOR_EAGAIN ) {
-      cprSleep(100);
-      retry++;
-      rc = sendto(soc, msg, len, flags, (struct sockaddr *)dest_addr, dest_len);
+    if (local->domain == AF_LOCAL) {
+        dummy_socket *remote = find_socket(AF_LOCAL, dest_addr, dest_len);
+        if (!remote)
+            return CPR_FAILURE;
+        else
+            return cprSend(remote->fd, msg, len, flags | CPR_REVERSE);
     }
-
-    if (rc == -1) {
-        return SOCKET_ERROR;
+    else {
+        if (local->domain == AF_INET) {
+            printf("Sending packet on socket %d to addr %s\n", soc, inet_ntoa(((struct sockaddr_in *)dest_addr)->sin_addr));
+        }
+        
+        return cprSend(soc, msg, len, flags);
     }
-    return rc;
 }
 
 /**
@@ -658,9 +819,7 @@ cprSetSockOpt (cpr_socket_t soc,
                cpr_socklen_t opt_len)
 {
     cprAssert(opt_val != NULL, CPR_FAILURE);
-
-    return ((setsockopt(soc, (int)level, (int)opt_name, opt_val, opt_len) != 0)
-            ? CPR_FAILURE : CPR_SUCCESS);
+    return CPR_SUCCESS;
 }
 
 /**
@@ -682,29 +841,14 @@ cprSetSockOpt (cpr_socket_t soc,
 cpr_status_e
 cprSetSockNonBlock (cpr_socket_t soc)
 {
-    return ((fcntl(soc, F_SETFL, O_NONBLOCK) != 0) ? CPR_FAILURE : CPR_SUCCESS);
+    return CPR_SUCCESS;
 }
 
 cpr_status_e
 cprShutDown (cpr_socket_t soc,
              cpr_shutdown_e how)
 {
-    int os_how;
-
-    switch (how) {
-      case CPR_SHUTDOWN_RECEIVE:
-          os_how = SHUT_RD;
-          break;
-      case CPR_SHUTDOWN_SEND:
-          os_how = SHUT_WR;
-          break;
-      case CPR_SHUTDOWN_BOTH:
-      default:
-          os_how = SHUT_RDWR;
-          break;
-    }
-
-    return ((shutdown(soc, os_how) != 0) ? CPR_FAILURE : CPR_SUCCESS);
+    return cprCloseSocket(soc);
 }
 
 /**
@@ -754,13 +898,21 @@ cprSocket (uint32_t domain,
            uint32_t type,
            uint32_t protocol)
 {
-    cpr_socket_t s;
+    int i;
 
-    s = socket((int)domain, (int)type, (int)protocol);
-    if (s == -1) {
-        return INVALID_SOCKET;
+    for (i=0; i<MAX_SOCKETS; i++) {
+        dummy_socket *s = &socket_table[i];
+        if (!s->in_use) {
+            memset(s, 0, sizeof(dummy_socket));
+            s->in_use = 1;
+            s->domain = domain;
+            s->fd = i;
+            printf("Created socket %d\n", i);
+            return i;
+        }
     }
-    return s;
+    
+    return INVALID_SOCKET;
 }
 
 /**
@@ -1023,5 +1175,4 @@ cpr_inet_pton6(const char *src, uint8_t *dst)
 	memcpy(dst, tmp, IN6ADDRSZ);
 	return (1);
 }
-
 

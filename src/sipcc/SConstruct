@@ -6,6 +6,7 @@ Import('debug')
 Import('x64')
 Import('mozsrcpath')
 Import('chromiumbaseincludepath')
+Import('dummynet')
 
 if(chromiumbaseincludepath == 'third_party'):
   chromiumbaseincludepath = '../../third_party/chromium_base'
@@ -148,13 +149,17 @@ elif targetPlatform == 'darwin':
     'cpr/darwin/cpr_darwin_ipc.c',
     'cpr/darwin/cpr_darwin_locks.c',
     'cpr/darwin/cpr_darwin_memory.c',
-    'cpr/darwin/cpr_darwin_socket.c',
     'cpr/darwin/cpr_darwin_stdio.c',
     'cpr/darwin/cpr_darwin_stdlib.c',
     'cpr/darwin/cpr_darwin_string.c',
     'cpr/darwin/cpr_darwin_threads.c',
     'cpr/darwin/cpr_darwin_timers_using_select.c'
   ]
+  if dummynet:
+     src_files += ['cpr/dummy/cpr_dummy_socket.c']
+  else:
+     src_files += ['cpr/darwin/cpr_darwin_socket.c']
+
         
 elif targetPlatform == 'win32': 
   src_files += Glob('cpr/win32/*.c')
@@ -199,7 +204,6 @@ if targetPlatform in [ 'linux2', 'darwin' ]:
     'NO_SOCKET_POLLING',
   ]
 
-  CPP_FLAGS += ['-O']
   if int(debug) != 0:
     CPP_FLAGS += ['-g']
 
@@ -363,7 +367,7 @@ psipccEnv.AppendUnique(CPPFLAGS = CPP_FLAGS)
 psipccEnv.AppendUnique(CPPDEFINES = CPP_DEFINES)
 psipccEnv.AppendUnique(LINKFLAGS = ldflags)
 psipccEnv.AppendUnique(CPPPATH = include_dirs)
-
+psipccEnv.AppendUnique(dummynet = dummynet)
 
 psipcc_static_lib = psipccEnv.StaticLibrary('sipcc' + name_suffix, src_files, LIBS=[], LIBPATH=[])
 stub_static_lib = psipccEnv.StaticLibrary('sipcc-sample-plugins' + name_suffix, src_files_stub, LIBS=[], LIBPATH=[])

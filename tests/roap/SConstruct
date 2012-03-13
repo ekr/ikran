@@ -182,7 +182,7 @@ if sys.platform =='win32':
 elif sys.platform == 'darwin':
 
   if x64 == 'yes':
-    mozobjpath = mozsrcpath + '/obj-x86_64-apple-darwin11.2.0'
+    mozobjpath = mozsrcpath + '/obj-x86_64-apple-darwin11.3.0'
   else:
     mozobjpath = mozsrcpath + '/obj-ff-dbg'
 
@@ -199,7 +199,7 @@ elif sys.platform == 'darwin':
     '../../ikran',
     mozobjpath + '/dist/sdk/lib',
     mozobjpath + '/dist/sdk/bin',
-    webrtcpath + '/xcodebuild/Debug',
+    webrtcpath + '/out/Debug',
   ]
   libs += [
     componentName + suffixName,
@@ -225,7 +225,7 @@ elif sys.platform == 'darwin':
     'libCNG.a',
     'libG711.a',
     'libG722.a',
-    'libgenperf_libs.a',
+#    'libgenperf_libs.a',
     'libiLBC.a',
     'libiSAC.a',
     'libiSACFix.a',

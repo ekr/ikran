@@ -30,6 +30,12 @@ else:
   print 'Environment variable WEBRTCPATH must be set to webrtc trunk path'
   exit(1)
  
+if 'DUMMYNET' in os.environ:	
+   print 'Dummynet'
+   dummynet = True
+else:
+   dummynet = False
+
 if sys.platform =='win32':
   if 'MS_VC_PATH' in os.environ: 
     ms_vc_path=os.environ['MS_VC_PATH']
@@ -267,6 +273,7 @@ Export('chromiumbaseincludepath')
 Export('chromiumbaselibpath')
 Export('suffixName')
 Export('componentName')
+Export('dummynet')
 
 SCRIPT_FILES = [ 
 
@@ -285,6 +292,7 @@ SCRIPT_FILES = [
 # Unit tests and testapp builds are all static.
 SCRIPT_FILES += [ 
   'tests/testapp_softphone/SConstruct',
+  'tests/trivial/SConstruct',
 ]
 
 if sys.platform in [ 'win32', 'linux2','darwin']:

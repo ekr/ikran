@@ -7,10 +7,11 @@ Import('webrtcpath')
 Import('mozsrcpath')
 Import('x64')
 Import('chromiumbaseincludepath')
+Import('dummynet')
 
 if(chromiumbaseincludepath == 'third_party'):
   chromiumbaseincludepath = '../third_party/chromium_base'
-
+   
 include_dirs = [
   '.',
   'config',

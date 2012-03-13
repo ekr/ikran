@@ -3,8 +3,18 @@
 #
 
 # Retrieve environment
+import os
 Import('psipccVars')
+
 env = psipccVars['PSIPCC_ENV'].Clone()
+
+if 'DUMMYNET' in os.environ:	
+   print 'Dummynet internal'
+   dummynet = True
+else:
+   print 'No dummynet'
+   dummynet = False
+
 
 # Build the include directory list    
 env.Append(CPPPATH = [ 'include', '../include', '../core/includes', '../plat/common' ])
@@ -40,13 +50,16 @@ elif psipccVars['TARGET_PLATFORM'] == 'darwin':
         darwin/cpr_darwin_ipc.c
         darwin/cpr_darwin_locks.c
         darwin/cpr_darwin_memory.c
-        darwin/cpr_darwin_socket.c
         darwin/cpr_darwin_stdio.c
         darwin/cpr_darwin_stdlib.c
         darwin/cpr_darwin_string.c
         darwin/cpr_darwin_threads.c
         darwin/cpr_darwin_timers_using_select.c 
         """)
+    if dummynet:
+       sources += "darwin/cpr_darwin_socket.c"
+    else:
+       sources += "darwin/cpr_dummy_socket.c"
 elif psipccVars['TARGET_PLATFORM'] in [ 'win32' ]:
 	sources += Glob('win32/*.c')
 
